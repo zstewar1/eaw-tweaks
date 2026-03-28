@@ -1,0 +1,20 @@
+[project]
+name = "eaw-tweaks"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Zachary Stewart", email = "zachary.c.stewart@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "lxml>=6.0.2",
+    "petro-meg>=1.0.0",
+]
+
+[project.scripts]
+eaw-tweaks = "eaw_tweaks:main"
+
+[build-system]
+requires = ["uv_build>=0.10.6,<0.11.0"]
+build-backend = "uv_build"
