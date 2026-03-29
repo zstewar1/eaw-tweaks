@@ -1,12 +1,14 @@
-from typing import Generator, List
-import contextlib
+from collections.abc import Generator, Iterable
+import os
 from lxml import etree
 from pathlib import Path, PureWindowsPath
-from petro_meg import FileEntry, read_meg, MegPath
+from petro_meg import read_meg
 
 
-def list_mega_files(game_data: Path) -> List[Path]:
+def list_mega_files(game_data: os.PathLike) -> list[Path]:
     """Load the list of MEGA files from megafiles.xml in the given GameData dir."""
+    if not isinstance(game_data, Path):
+        game_data = Path(game_data)
     data_dir = game_data / "Data"
     megafiles = game_data / "Data" / "megafiles.xml"
 
@@ -27,44 +29,20 @@ def list_mega_files(game_data: Path) -> List[Path]:
     return true_paths
 
 
-@contextlib.contextmanager
-def find_config_files(mega_files: List[Path]) -> Generator[List[FileEntry]]:
-    """Opens every mega file in the given list of mega_files and returns FileEntries for xml files.
-
-    Finds all files in the given MEGA files list that have .XML extensions and retuns them.
-
-    This function works as a context manager. It will keep all of the MEGA files for the returned
-    FileEntry list open, so you can safely use FileEntry.read.
-    """
-    config_files = []
-    keep_mega_files = contextlib.ExitStack()
-    try:
-        for mega_file in mega_files:
-            mega_file = open(mega_file, "rb")
-            try:
-                configs = [
-                    entry
-                    for entry in read_meg(mega_file, version="v1")
-                    if _is_xml(entry.name)
-                ]
-            except:
-                # In case of error, close this MEGA file. others will be handled by the ExitStack.
-                mega_file.close()
-                raise
-            if configs:
-                # Add the file to the exit stack before extending the config_files to ensure its set
-                # to be closed ASAP.
-                keep_mega_files.enter_context(mega_file)
-                config_files.extend(configs)
-            else:
-                # If there were no configs in this MEGA file, we can close it immediately.
-                mega_file.close()
-
-        yield config_files
-    finally:
-        keep_mega_files.close()
-
-
-def _is_xml(path: MegPath) -> bool:
-    """Returns true if the path ends with .XML."""
-    return str(path).upper().endswith('.XML')
+def get_xml_files(mega_files: Iterable[Path]) -> Generator[tuple[PureWindowsPath, etree.ElementTree]]:
+    """Gets all XML files in the given mega files as etree.ElementTree, along with the relative
+    paths within the MEGA file."""
+    for mega_file in mega_files:
+        with open(mega_file, "rb") as mega_file:
+            for file in read_meg(mega_file, version="v1"):
+                path = PureWindowsPath(str(file.name))
+                if path.suffix.upper() == ".XML":
+                    data = file.read()
+                    encoding = "utf-8"
+                    try:
+                        data.decode("utf-8")
+                    except UnicodeDecodeError:
+                        encoding = "cp1252"
+                    parser = etree.XMLParser(encoding=encoding, recover=True)
+                    root = etree.XML(data, parser=parser)
+                    yield path, etree.ElementTree(root)
