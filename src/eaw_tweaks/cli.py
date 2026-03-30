@@ -56,7 +56,10 @@ def main() -> None:
             "then an item to import from that module."
         ),
         nargs="*",
-        default=["eaw_tweaks.builtin:default"],
+        default=[
+            "eaw_tweaks.builtin:projectile_speed_multiplier:2",
+            'eaw_tweaks.builtin:uniform_lasers:"beam"',
+        ],
     )
 
     args = parser.parse_args()
