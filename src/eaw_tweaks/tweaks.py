@@ -1,9 +1,11 @@
-from typing import cast, runtime_checkable, Protocol
-from collections.abc import Callable
 import functools
-from lxml import etree
-from .collections import FuncArgs, ArgTree, map_arg_tree
+from abc import ABC, abstractmethod
+from collections.abc import Callable, Iterable
 
+from lxml import etree
+
+from .collections import FilterFunc, FuncArgs
+from .modbuilder import ModBuilder
 
 type XPathable = etree.XPath | str | bytes | bytearray
 
@@ -14,117 +16,183 @@ def _make_xpath(pathable: XPathable) -> etree.XPath:
     return etree.XPath(pathable)
 
 
-type TweakArg[T] = T | ArgTree[T]
+class Tweak(ABC):
+    """Defines an object which can apply tweaks to the EAW game files.."""
+
+    @abstractmethod
+    def __tweak_eaw__(self, configs: ModBuilder):
+        pass
 
 
-@runtime_checkable
-class TweakFunction(Protocol):
-    """Defines a function which can be used to apply tweaks."""
+class _TweakSelector:
+    """Container for an XPath based selector and an optional corresponding filter."""
 
-    def __call__(self, *args, **kwargs): ...
-
-    @property
-    def __eaw_selector__(self) -> ArgTree[etree.XPath]: ...
-
-
-def bin(o):
-    if o is None:
-        breakpoint()
-    return o
-
-
-class TweakList(TweakFunction):
-    """Combinator that merges several sets of tweaks."""
-
-    def __init__(self, *tweaks: TweakFunction):
-        self._tweaks = tweaks
+    def __init__(self, xpath: etree.XPath, filter_func: FilterFunc | None = None):
+        self._xpath = xpath
+        self._filter_func = filter_func
 
     @property
-    def __eaw_selector__(self) -> ArgTree[etree.XPath]:
-        return FuncArgs(bin(tweak).__eaw_selector__ for tweak in self._tweaks)
+    def xpath(self) -> etree.XPath:
+        return self._xpath
 
-    def __call__(self, *args: ArgTree[list[etree.Element]]):
-        if len(args) != len(self._tweaks):
+    @property
+    def filter_func(self) -> FilterFunc | None:
+        return self._filter_func
+
+    def filter(self, filter_func: FilterFunc) -> _TweakSelector:
+        """Returns a new _TweakSelector that applies the given filter_func to the output of the
+        current selector.
+        """
+        if self._filter_func is None:
+            return _TweakSelector(self._xpath, filter_func)
+        base_filter = self._filter_func
+
+        def combined_filter(elem: etree.Element) -> bool:
+            return base_filter(elem) and filter_func(elem)
+
+        return _TweakSelector(self._xpath, combined_filter)
+
+    def fetch(self, game_sources: ModBuilder) -> list[etree.Element]:
+        """Fetch this swlector from the game sources."""
+        return game_sources.fetch(self._xpath, filter_func=self._filter_func)
+
+
+class TweakFunction(Tweak):
+    """Wraps a function to make it operate as a Tweak.
+
+    Takes a function and a FuncArgs of XPath-based TweakSelectors. When __tweak_eaw__ is called, it
+    will map the XPath selectors for every argument to a matching list of elements, and then call
+    the function with the corresponding list of xpath matches in each argument position.
+
+    Any file which matches an XPath selector will be marked as modified, even if nothing from it is
+    ever modified.
+    """
+
+    def __init__(self, func: Callable[..., None], selectors: FuncArgs[_TweakSelector]):
+        """Internal."""
+        self._func = func
+        self._selectors = selectors
+
+    @property
+    def func(self) -> Callable[..., None]:
+        """Gets the underlying tweak function."""
+        return self._func
+
+    def __tweak_eaw__(self, configs: ModBuilder):
+        self._selectors.map(lambda selector: selector.fetch(configs)).apply(self.func)
+
+    def filter(
+        self, *afilters: FilterFunc | None, **kwfilters: FilterFunc | None
+    ) -> TweakFunction:
+        """Returns a new TweakFunction with filters added to the selectors.
+
+        The provided filters must structurally match a subset of the xpath values the tweak function
+        is looking for. That is, if the XPath selector is positional, it can only be filtered
+        positionally and if it is a keword argument it can only be filtered as a keyword argument.
+        Additionally, the positional filters must be no longer than the list of args and the keword
+        filters must be a strict subset of the keyword-based XPath selectors.
+
+        Each arg filter or kwarg filter is allowed to be None. If None is provided no additional
+        filtering is done, but existing filters are not removed.
+        """
+        if len(afilters) > len(self._selectors.args):
             raise ValueError(
-                f"Have {len(self._tweaks)} tweak functions to apply, but got {len(args)} sets of "
-                "tweak function args."
+                f"Provided {len(afilters)} positional filters, but there are only {len(self._selectors.args)} positional selectors"
             )
-        for arg, tweak in zip(args, self._tweaks):
-            arg.apply(tweak)
+        # Note: we have to use 'not <=' because `>=` is superset, which is not the same as 'not
+        # subset'!
+        if not (kwfilters.keys() <= self._selectors.kwargs.keys()):
+            raise ValueError(
+                "Keyword filters must be a subset of keyword selectors, but the provided filters "
+                "had the following keys which did not match any selectors: "
+                f"{kwfilters.keys() - self._selectors.kwargs.keys()}"
+            )
+
+        newargs = list(self._selectors.args)
+        for i, afilter in enumerate(afilters):
+            if afilter is not None:
+                newargs[i] = newargs[i].filter(afilter)
+        newkwargs = dict(self._selectors.kwargs)
+        for key, kwfilter in kwfilters.items():
+            if kwfilter is not None:
+                newkwargs[key] = newkwargs[key].filter(kwfilter)
+        return TweakFunction(self._func, FuncArgs(newargs, newkwargs))
+
+
+class TweakList(Tweak):
+    """Combinator that merges several tweaks.
+
+    Tweaks will be applied sequentially, so subsequent tweaks are affected by ones that run prior to
+    them.
+    """
+
+    def __init__(self, tweaks: Iterable[Tweak]):
+        self._tweaks = list(tweaks)
+
+    def __tweak_eaw__(self, configs: ModBuilder):
+        for tweak in self._tweaks:
+            tweak.__tweak_eaw__(configs)
 
 
 def tweak(
-    *args: TweakArg[XPathable], **kwargs: TweakArg[XPathable]
+    *aselectors: XPathable, **kwselectors: XPathable
 ) -> Callable[[Callable[..., None]], TweakFunction]:
-    """Decorator which labels a function as a tweak definition by declaring which XPath selectors it
-    requires."""
+    """Decorator which converts a function into a TweakFunction.
+
+    The decorator factory takes args and keyword arguments that specify XPaths to fetch from across
+    all of the game's configs. When the tweak is run, those xpaths will be fetched and the inner
+    function will be called with a list[etree.Element] corresponding to each argument and keyword
+    argument of xpaths provided to `tweak_function`.
+    """
+    selectors = FuncArgs(aselectors, kwselectors).map(
+        lambda selector: _TweakSelector(_make_xpath(selector))
+    )
 
     def tweak_decorator(func: Callable[..., None]) -> TweakFunction:
-        func_args = map_arg_tree(FuncArgs(args, kwargs), _make_xpath)
-
-        @functools.wraps(func)
-        def tweak_wrapper(
-            *wrapped_args: TweakArg[list[etree.Element]],
-            **wrapped_kwargs: TweakArg[list[etree.Element]],
-        ):
-            func(*wrapped_args, **wrapped_kwargs)
-
-        setattr(tweak_wrapper, "__eaw_selector__", func_args)
-        return cast(TweakFunction, tweak_wrapper)
+        return TweakFunction(func, selectors)
 
     return tweak_decorator
 
 
-def _extract_visit(
-    xml: etree.ElementTree, selector: TweakArg[etree.XPath], output: TweakArg[list[etree.Element]]
-) -> bool:
-    """Visit a single arg or kwarg for extract.
+type TweakFactory = Callable[..., Tweak]
 
-    selector and output must either both be leaf nodes or both be FuncArgs.
+
+class TweakFunctionFactory(ABC):
+    """Utility class which wraps a function that produces a TweakFunction to provide utility
+    methods.
     """
-    match selector, output:
-        case FuncArgs() as selector, FuncArgs() as output:
-            return _extract(xml, selector, output)
-        case etree.XPath() as selector, list() as output:
-            extracted = selector(xml.getroot())
-            output.extend(extracted)
-            return bool(extracted)
-        case _:
-            raise TypeError("selector and output must either both be FuncArgs or both leaves")
+
+    @abstractmethod
+    def __call__(self, *args, **kwargs) -> TweakFunction:
+        pass
+
+    def filter(
+        self, *afilters: FilterFunc | None, **kwfilters: FilterFunc | None
+    ) -> TweakFunctionFactory:
+        """Applies the given filters to the constructed TweakFunction. See TweakFunction.filter"""
+        return _FilteredTweakFunctionFactory(self, FuncArgs(afilters, kwfilters))
 
 
-def _extract(
-    xml: etree.ElementTree,
-    selectors: ArgTree[etree.XPath],
-    output: ArgTree[list[etree.Element]],
-) -> bool:
-    """Recursivly visit the selectors and output, extracting all real selectors from the tree.
-
-    Return true if anything was extracted, otherwise false.
+class tweak_factory(TweakFunctionFactory):
+    """Wraps a function that returns a TweakFunction to add support for the filter method at the
+    factory level.
     """
-    extracted = False
-    for sel, out in zip(selectors.args, output.args):
-        # Make sure not short circuit the recursive call.
-        extracted = _extract_visit(xml, sel, out) or extracted
-    for key in selectors.kwargs:
-        sel = selectors.kwargs[key]
-        out = output.kwargs[key]
-        # Make sure not short circuit the recursive call.
-        extracted = _extract_visit(xml, sel, out) or extracted
-    return extracted
+
+    def __init__(self, func: Callable[..., TweakFunction]):
+        if not isinstance(func, TweakFunctionFactory):
+            functools.update_wrapper(self, func)
+        self._func = func
+
+    def __call__(self, *args, **kwargs) -> TweakFunction:
+        return self._func(*args, **kwargs)
 
 
-class SelectorCollector(object):
-    """Collects XPath selector values across many XML files."""
+class _FilteredTweakFunctionFactory(TweakFunctionFactory):
+    def __init__(
+        self, inner: TweakFunctionFactory, filters: FuncArgs[FilterFunc | None]
+    ):
+        self._inner = inner
+        self._filters = filters
 
-    def __init__(self, selectors: ArgTree[etree.XPath]):
-        self._selectors = selectors
-        self._collectors: ArgTree[list[etree.Element]] = map_arg_tree(selectors, lambda _: [])
-
-    def visit_document(self, tree: etree.ElementTree) -> bool:
-        """Visit the document, returning true if anything was extracted from it."""
-        return _extract(tree, self._selectors, self._collectors)
-
-    def collected(self) -> ArgTree[list[etree.Element]]:
-        """Create a deep copy of the elements collected so far."""
-        return map_arg_tree(self._collectors, lambda lst: list(lst))
+    def __call__(self, *args, **kwargs) -> TweakFunction:
+        return self._filters.apply(super().__call__(*args, **kwargs).filter)

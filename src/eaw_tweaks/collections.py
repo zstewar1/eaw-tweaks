@@ -1,5 +1,10 @@
+from collections.abc import Callable, Iterable, Mapping
 from typing import overload
-from collections.abc import Mapping, Callable, Iterable
+
+from lxml import etree
+
+type FilterFunc = Callable[[etree.Element], bool]
+type Dictable[K, V] = Mapping[K, V] | Iterable[tuple[K, V]]
 
 
 class FuncArgs[T]:
@@ -13,16 +18,18 @@ class FuncArgs[T]:
     def __init__(
         self,
         args: Iterable[T] | None = None,
-        kwargs: Mapping[str, T] | Iterable[tuple[str, T]] | None = None,
+        kwargs: Dictable[str, T] | None = None,
     ): ...
     def __init__(
         self,
         args: Iterable[T] | FuncArgs[T] | None = None,
-        kwargs: Mapping[str, T] | Iterable[tuple[str, T]] | None = None,
+        kwargs: Dictable[str, T] | None = None,
     ):
         if isinstance(args, FuncArgs):
             if kwargs is not None:
-                raise TypeError("Cannot pass a FuncArgs to copy and pass separate kwargs.")
+                raise TypeError(
+                    "Cannot pass a FuncArgs to copy and pass separate kwargs."
+                )
             self._args = list(args.args)
             self._kwargs = dict(args.kwargs)
         else:
@@ -49,19 +56,3 @@ class FuncArgs[T]:
             args=(func(arg) for arg in self._args),
             kwargs=((key, func(value)) for key, value in self._kwargs.items()),
         )
-
-
-type ArgTree[T] = FuncArgs[T] | FuncArgs[ArgTree[T]]
-
-
-def map_arg_tree[T, U](tree: ArgTree[T], func: Callable[[T], U]) -> ArgTree[U]:
-    """Map one tree of arguments to another recursively."""
-    @overload
-    def map_inner(leaf: T) -> U: ...
-    @overload
-    def map_inner(node: ArgTree[T]) -> ArgTree[U]: ...
-    def map_inner(node: ArgTree[T] | T):
-        if isinstance(node, FuncArgs):
-            return node.map(map_inner)
-        return func(node)
-    return tree.map(map_inner)

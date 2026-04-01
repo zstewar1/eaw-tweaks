@@ -1,13 +1,14 @@
-from typing import cast
-from collections.abc import Iterable, Mapping
-from pathlib import PureWindowsPath, Path
-import os
+import copy
 import io
+import os
+from collections.abc import Iterable, Mapping
+from pathlib import Path, PureWindowsPath
+from typing import Literal, cast
+
 from lxml import etree
 from petro_meg import MegBuilder
-from . import megafiles
-from .tweaks import TweakFunction, TweakList, SelectorCollector
 
+from .collections import Dictable, FilterFunc
 
 BUNDLE_MEGA_XML = PureWindowsPath("Data") / "megafiles.xml"
 BUNDLE_MEGA_XML_CONTENT = (
@@ -19,36 +20,131 @@ BUNDLE_MEGA_XML_CONTENT = (
 BUNDLE_OVERRIDES_MEG = PureWindowsPath("Data") / "Overrides.meg"
 
 
-def build_mod(game_data: os.PathLike, tweaks: Iterable[TweakFunction]) -> Mod:
-    mega_files = megafiles.list_mega_files(game_data)
-    tweaks: TweakList = TweakList(*tweaks)
-    input_collector = SelectorCollector(tweaks.__eaw_selector__)
-    affected_files = {}
-    for path, xml in megafiles.get_xml_files(mega_files):
-        if input_collector.visit_document(xml):
-            affected_files[path] = xml
-    input_collector.collected().apply(tweaks)
-    return Mod(affected_files)
+class ModBuilder:
+    """Holds the source configs for the game and tracks which have been modified."""
 
+    def __init__(self, configs: Dictable[os.PathLike, etree.ElementTree] | ModBuilder):
+        """Initialize a set of Mod from a collection of file paths and corresponding element
+        trees.
 
-class ModExistsError(FileExistsError):
-    pass
+        If the input is another ModBuilder, the element trees will be deep-copied to avoid linking.
+        If the input is a dict or map, the trees are not copied so changes stay linked to the input.
+        """
+        if isinstance(configs, ModBuilder):
+            self._configs = {
+                path: copy.deepcopy(config) for path, config in configs._configs.items()
+            }
+            self._modified = set(configs._modified)
+        else:
+            if isinstance(configs, Mapping):
+                configs = cast(
+                    Iterable[tuple[os.PathLike, etree.ElementTree]], configs.items()
+                )
+            self._configs = {PureWindowsPath(path): config for path, config in configs}
+            self._modified = set()
 
-
-class Mod:
-    """Represents a Mod as a list of XML files."""
-
-    def __init__(
+    def overlay(
         self,
-        files: Mapping[os.PathLike, etree.ElementTree]
-        | Iterable[tuple[os.PathLike, etree.ElementTree]] = [],
+        configs: Dictable[os.PathLike, etree.ElementTree] | ModBuilder,
+        mark_modified: bool | Literal["propagate"] = True,
     ):
-        """Construct a Mod from a mapping of relative file paths to XML contents."""
-        if isinstance(files, Mapping):
-            files = cast(Iterable[tuple[os.PathLike, etree.ElementTree]], files.items())
-        self._files = {PureWindowsPath(path): xml for path, xml in files}
+        """Overlay additional configs, replacing ones with the same path.
 
-    def write_dir(self, mod: os.PathLike, /, bundle: bool = False, overwrite: bool = False):
+        This is intended for overlaying files from an existing Mod on top of the base game's files.
+        By default all overlayed files will be marked as modified unless you pass
+        mark_modified=False
+
+        When overlaying an existing Mod, mark_modified can be set to "propagate" instead,
+        which will copy the modified state from the overlay. That means that 'propagate' can un-mark
+        files from modified back to unmodified.
+
+        When passing Mod, the ElementTrees will be copied, so changes will not be linked
+        between the two Mod. For dict or iterable inputs, no copy is performed.
+        """
+        if isinstance(configs, ModBuilder):
+            for path, config in configs._configs.items():
+                self._configs[path] = copy.deepcopy(config)
+            if mark_modified == "propagate":
+                self._modified -= configs._configs.keys()
+                self._modified |= configs._modified
+            elif mark_modified:
+                self._modified |= configs._modified
+        else:
+            if mark_modified == "propagate":
+                raise ValueError('"propagate" can only be used for Mod')
+            if isinstance(configs, Mapping):
+                configs = cast(
+                    Iterable[tuple[os.PathLike, etree.ElementTree]], configs.items()
+                )
+            for path, config in configs:
+                path = PureWindowsPath(path)
+                self._configs[path] = config
+                if mark_modified:
+                    self._modified.add(path)
+
+    def mark_modified(self, *paths: os.PathLike):
+        """Mark a config as modified."""
+        for orig_path in paths:
+            path = PureWindowsPath(orig_path)
+            if path not in self._configs:
+                raise ValueError(f"File {orig_path} is not in the game files")
+            self._modified.add(path)
+
+    def modified(self) -> dict[PureWindowsPath, etree.ElementTree]:
+        """Get all currently Modified files from the game."""
+        return {
+            path: config
+            for path, config in self._configs.items()
+            if path in self._modified
+        }
+
+    def files(self) -> set[PureWindowsPath]:
+        """Get a set of all files in this Mod.
+
+        Does not mark anything as modified.
+        """
+        return set(self._configs.keys())
+
+    def get_file(
+        self, path: os.PathLike, mark_modified=True
+    ) -> etree.ElementTree | None:
+        """Gets the file with the specified path.
+
+        Returns None if the file does not exist.
+
+        Marks the file as modified unless mark_modified is False.
+        """
+        path = PureWindowsPath(path)
+        config = self._configs.get(path)
+        if mark_modified and config is not None:
+            self._modified.add(path)
+        return config
+
+    def fetch(
+        self,
+        xpath: etree.XPath,
+        mark_modified=True,
+        filter_func: FilterFunc | None = None,
+    ) -> list[etree.Element]:
+        """Fetch every match of the given xpath from across all configs in the game sources.
+
+        This will mark all matching files as modified unless you pass mark_modified=False.
+
+        If a filter function is provided, it will be applied before marking a file as modified.
+        """
+        collector = []
+        for path, config in self._configs.items():
+            matches = xpath(config.getroot())
+            if filter_func is not None:
+                matches = list(filter(filter_func, matches))
+            if mark_modified and matches:
+                self._modified.add(path)
+            collector.extend(matches)
+        return collector
+
+    def write_dir(
+        self, mod: os.PathLike, /, bundle: bool = False, overwrite: bool = False
+    ):
         """Write this Mod to the given directory.
 
         If bundle is true, pack the mod into a MEGA file.
@@ -73,12 +169,12 @@ class Mod:
 
     def _write_packed(self, mod: Path) -> frozenset[PureWindowsPath]:
         builder = MegBuilder("v1")
-        for path, file in self._files.items():
+        for path, file in self.modified().items():
             content = io.BytesIO()
             file.write(content, encoding=file.docinfo.encoding, xml_declaration=True)
             builder[str(path)] = content
 
-        (mod / 'Data').mkdir(exist_ok=True)
+        (mod / "Data").mkdir(exist_ok=True)
         with open(mod / BUNDLE_OVERRIDES_MEG, "wb") as meg_out:
             builder.build(meg_out)
         with open(mod / BUNDLE_MEGA_XML, "wb") as meg_xml:
@@ -86,11 +182,18 @@ class Mod:
         return frozenset((BUNDLE_OVERRIDES_MEG, BUNDLE_MEGA_XML))
 
     def _write_loose(self, mod: Path) -> frozenset[PureWindowsPath]:
-        for path, file in self._files.items():
+        modified = self.modified()
+        for path, file in modified.items():
             (mod / path.parent).mkdir(exist_ok=True, parents=True)
-            with open(mod / path, 'wb') as xml_out:
-                file.write(xml_out, encoding=file.docinfo.encoding, xml_declaration=True)
-        return frozenset(self._files.keys())
+            with open(mod / path, "wb") as xml_out:
+                file.write(
+                    xml_out, encoding=file.docinfo.encoding, xml_declaration=True
+                )
+        return frozenset(modified.keys())
+
+
+class ModExistsError(FileExistsError):
+    pass
 
 
 def relative_contents(path: Path) -> set[PureWindowsPath]:

@@ -1,15 +1,18 @@
-from typing import Any
-import sys
 import argparse
-from pathlib import Path
 import importlib
 import json
+import sys
+from pathlib import Path
+from typing import Any
+
+from . import megafiles
 from .collections import FuncArgs
-from .tweaks import TweakFunction
-from . import modbuilder
+from .modbuilder import ModBuilder, ModExistsError
+from .tweaks import Tweak, TweakList
 
-
-DEFAULT_PATH = Path("~/.steam/steam/steamapps/common/Star Wars Empire at War/corruption")
+DEFAULT_PATH = Path(
+    "~/.steam/steam/steamapps/common/Star Wars Empire at War/corruption"
+)
 
 
 def main() -> None:
@@ -58,36 +61,45 @@ def main() -> None:
         nargs="*",
         default=[
             "eaw_tweaks.builtin:projectile_speed_multiplier:2",
-            'eaw_tweaks.builtin:uniform_lasers:"beam"',
+            'eaw_tweaks.builtin:beam_energy_weapons',
         ],
     )
 
     args = parser.parse_args()
     game_data = args.eaw if args.eaw is not None else DEFAULT_PATH.expanduser()
-    tweaks = (_load_tweak(tweak) for tweak in args.tweaks)
-    mod = modbuilder.build_mod(game_data, tweaks)
+    try:
+        tweaks = TweakList(_load_tweak(tweak) for tweak in args.tweaks)
+    except Exception as e:
+        print(f"Error loading tweaks: {e}", file=sys.stderr)
+        sys.exit(1)
+    sources = megafiles.list_mega_files(game_data)
+    builder = ModBuilder(megafiles.get_xml_files(sources))
+    tweaks.__tweak_eaw__(builder)
 
     try:
-        mod.write_dir(
-            game_data / "Mods" / args.modname, bundle=args.bundle, overwrite=args.overwrite
+        builder.write_dir(
+            game_data / "Mods" / args.modname,
+            bundle=args.bundle,
+            overwrite=args.overwrite,
         )
-    except modbuilder.ModExistsError:
+    except ModExistsError:
         print(
-            "Refusing to overwrite non-empty mod directory without overwrite flag", file=sys.stderr
+            "Refusing to overwrite non-empty mod directory without overwrite flag",
+            file=sys.stderr,
         )
         sys.exit(1)
 
 
-def _load_tweak(name: str) -> TweakFunction:
+def _load_tweak(name: str) -> Tweak:
     module, item, *args = name.split(":", maxsplit=2)
     module = importlib.import_module(module)
     item = getattr(module, item)
-    if args or not isinstance(item, TweakFunction):
+    if args or not isinstance(item, Tweak):
         # Assume this is a factory function instead, so try to call it with optional args.
         args = _parse_tweak_args(args)
         item = args.apply(item)
-    if not isinstance(item, TweakFunction):
-        raise ValueError(f"{item!r} is not a TweakFunction")
+    if not isinstance(item, Tweak):
+        raise ValueError(f"{item!r} is not a Tweak")
     return item
 
 
