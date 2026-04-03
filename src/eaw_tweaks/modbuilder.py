@@ -171,7 +171,7 @@ class ModBuilder:
         builder = MegBuilder("v1")
         for path, file in self.modified().items():
             content = io.BytesIO()
-            file.write(content, encoding=file.docinfo.encoding, xml_declaration=True)
+            file.write(content, encoding='utf-8', xml_declaration=True)
             builder[str(path)] = content
 
         (mod / "Data").mkdir(exist_ok=True)
@@ -187,7 +187,7 @@ class ModBuilder:
             (mod / path.parent).mkdir(exist_ok=True, parents=True)
             with open(mod / path, "wb") as xml_out:
                 file.write(
-                    xml_out, encoding=file.docinfo.encoding, xml_declaration=True
+                    xml_out, encoding='utf-8', xml_declaration=True
                 )
         return frozenset(modified.keys())
 

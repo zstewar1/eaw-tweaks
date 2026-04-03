@@ -1,7 +1,8 @@
-from collections.abc import Generator, Iterable
 import os
-from lxml import etree
+from collections.abc import Generator, Iterable
 from pathlib import Path, PureWindowsPath
+
+from lxml import etree
 from petro_meg import read_meg
 
 

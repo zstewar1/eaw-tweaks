@@ -1,6 +1,7 @@
 import functools
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
+from typing import overload
 
 from lxml import etree
 
@@ -81,9 +82,7 @@ class TweakFunction(Tweak):
     def __tweak_eaw__(self, configs: ModBuilder):
         self._selectors.map(lambda selector: selector.fetch(configs)).apply(self.func)
 
-    def filter(
-        self, *afilters: FilterFunc | None, **kwfilters: FilterFunc | None
-    ) -> TweakFunction:
+    def filter(self, *afilters: FilterFunc | None, **kwfilters: FilterFunc | None) -> TweakFunction:
         """Returns a new TweakFunction with filters added to the selectors.
 
         The provided filters must structurally match a subset of the xpath values the tweak function
@@ -188,11 +187,89 @@ class tweak_factory(TweakFunctionFactory):
 
 
 class _FilteredTweakFunctionFactory(TweakFunctionFactory):
-    def __init__(
-        self, inner: TweakFunctionFactory, filters: FuncArgs[FilterFunc | None]
-    ):
+    def __init__(self, inner: TweakFunctionFactory, filters: FuncArgs[FilterFunc | None]):
         self._inner = inner
         self._filters = filters
 
     def __call__(self, *args, **kwargs) -> TweakFunction:
-        return self._filters.apply(super().__call__(*args, **kwargs).filter)
+        return self._filters.apply(self._inner(*args, **kwargs).filter)
+
+
+class TweakFilter(ABC):
+    """A filter which can be applied to a tweak function or tweak function factory as a decorator."""
+
+    @abstractmethod
+    def __call__(self, *args, **kwargs) -> bool:
+        pass
+
+    @overload
+    def apply(self, tweak: TweakFunction) -> TweakFunction: ...
+    @overload
+    def apply(self, tweak: TweakFunctionFactory) -> TweakFunctionFactory: ...
+    def apply(self, tweak: TweakFunction | TweakFunctionFactory):
+        return tweak.filter(self)
+
+    @staticmethod
+    def any(*funcs: FilterFunc) -> TweakFilter:
+        """Creates a filter that matches if any of the given filters matches."""
+        return _TweakOr(*funcs)
+
+    @staticmethod
+    def all(*funcs: FilterFunc) -> TweakFilter:
+        """Creates a filter that matches if all of the given filters match."""
+        return _TweakAnd(*funcs)
+
+    def __or__(self, other: FilterFunc) -> TweakFilter:
+        return _TweakOr(self, other)
+
+    def __ior__(self, other: FilterFunc) -> TweakFilter:
+        return _TweakOr(other, self)
+
+    def __and__(self, other: FilterFunc) -> TweakFilter:
+        return _TweakAnd(self, other)
+
+    def __iand__(self, other: FilterFunc) -> TweakFilter:
+        return _TweakAnd(other, self)
+
+    def __invert__(self) -> TweakFilter:
+        return _TweakNot(self)
+
+
+class tweak_filter(TweakFilter):
+    """Utility wrapper for a function that acts as a filter for Tweaks which allows it to be used as
+    a decorator for a TweakFunction or TweakFunctionFactory.
+    """
+
+    def __init__(self, func: FilterFunc):
+        functools.update_wrapper(self, func)
+        self._func = func
+
+    def __call__(self, *args, **kwargs) -> bool:
+        return self._func(*args, **kwargs)
+
+
+class _TweakOr(TweakFilter):
+    def __init__(self, *funcs: FilterFunc):
+        self._funcs = funcs
+
+    def __call__(self, *args, **kwargs) -> bool:
+        return any(func(*args, **kwargs) for func in self._funcs)
+
+
+class _TweakAnd(TweakFilter):
+    def __init__(self, *funcs: FilterFunc):
+        self._funcs = funcs
+
+    def __call__(self, *args, **kwargs) -> bool:
+        return all(func(*args, **kwargs) for func in self._funcs)
+
+
+class _TweakNot(TweakFilter):
+    def __init__(self, inner: TweakFilter):
+        self._inner = inner
+
+    def __invert__(self) -> TweakFilter:
+        return self._inner
+
+    def __call__(self, *args, **kwargs) -> bool:
+        return not self._inner(*args, **kwargs)

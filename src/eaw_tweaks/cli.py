@@ -10,9 +10,7 @@ from .collections import FuncArgs
 from .modbuilder import ModBuilder, ModExistsError
 from .tweaks import Tweak, TweakList
 
-DEFAULT_PATH = Path(
-    "~/.steam/steam/steamapps/common/Star Wars Empire at War/corruption"
-)
+DEFAULT_PATH = Path("~/.steam/steam/steamapps/common/Star Wars Empire at War/corruption")
 
 
 def main() -> None:
@@ -60,8 +58,33 @@ def main() -> None:
         ),
         nargs="*",
         default=[
+            # General
             "eaw_tweaks.builtin:projectile_speed_multiplier:2",
-            'eaw_tweaks.builtin:beam_energy_weapons',
+            # Lasers/Turbolasers
+            'eaw_tweaks.builtin:teardrop_projectiles:{"name_contains": "Laser"}',
+            'eaw_tweaks.builtin:scale_projectiles:{"name_contains": "Laser", "width_scale": 2, "length_scale": 2}',
+            'eaw_tweaks.builtin:scale_projectiles:{"name_contains": "Turbolaser", "width_scale": 1.5, "length_scale": 1.5}',
+            'eaw_tweaks.builtin:scale_projectiles:{"name_contains": "Ion", "width_scale": 1.5, "length_scale": 1.5}',
+            'eaw_tweaks.builtin:scale_projectiles:{"name_contains_all": ["Laser", "Small"], "width_scale": 1.5, "length_scale": 1.5}',
+            'eaw_tweaks.builtin:projectile_aspect_ratio:{"name_contains_any":["Turbolaser", "Laser", "Ion"], "aspect": 8}',
+            # Concussion Missiles
+            'eaw_tweaks.builtin:teardrop_projectiles:{"name_contains_all": ["Concussion", "Ship"]}',
+            'eaw_tweaks.builtin:set_projectile_size:{"name_contains_all": ["Concussion", "Ship"], "width": 5, "length": 4}',
+            'eaw_tweaks.builtin:colorize_projectile:{"name_contains_all": ["Concussion", "Ship"], "color": "255,210,90,255"}',
+            # Proton Torpedoes
+            'eaw_tweaks.builtin:colorize_projectile:{"name_contains_all": ["Proton", "Ship"], "color": "190,130,255,255"}',
+            'eaw_tweaks.builtin:scale_projectiles:{"name_contains_all": ["Proton", "Ship"], "width_scale": 1.5, "length_scale": 1.5}',
+            'eaw_tweaks.builtin:projectile_aspect_ratio:{"name_contains_all":["Proton", "Ship"], "aspect": 6}',
+            # Hardpoint Fire rates
+            'eaw_tweaks.builtin:hardpoint_pulse_balance:{"proj_name_contains_all": ["Laser", "Large"], "pulse_delay": 0.01, "pulse_count": 1}',
+            'eaw_tweaks.builtin:hardpoint_pulse_balance:{"proj_name_contains_all": ["Laser", "Medum"], "pulse_delay": 0.04, "pulse_count": 2}',
+            'eaw_tweaks.builtin:hardpoint_pulse_balance:{"proj_name_contains_all": ["Turbolaser"], "pulse_delay": 0.06, "pulse_count": 2}',
+            'eaw_tweaks.builtin:hardpoint_pulse_balance:{"proj_name_contains_all": ["Ion"], "pulse_delay": 0.01, "pulse_count": 1}',
+            # Weapon Accuracy
+            "eaw_tweaks.builtin:accuracy_on_larger_targets",
+            # This doesn't work. For some reason, editing the TacticalCameras at all make the screen
+            # more zoomed in permanently.
+            # "eaw_tweaks.builtin:increase_max_zoom_out:1.0",
         ],
     )
 
@@ -71,6 +94,7 @@ def main() -> None:
         tweaks = TweakList(_load_tweak(tweak) for tweak in args.tweaks)
     except Exception as e:
         print(f"Error loading tweaks: {e}", file=sys.stderr)
+        raise e
         sys.exit(1)
     sources = megafiles.list_mega_files(game_data)
     builder = ModBuilder(megafiles.get_xml_files(sources))
