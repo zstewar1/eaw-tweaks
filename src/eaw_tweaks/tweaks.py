@@ -125,8 +125,25 @@ class TweakList(Tweak):
     them.
     """
 
+    @classmethod
+    def of(cls, *tweaks: Tweak) -> TweakList:
+        return cls(tweaks)
+
     def __init__(self, tweaks: Iterable[Tweak]):
         self._tweaks = list(tweaks)
+
+    def __iter__(self) -> Iterable[Tweak]:
+        return iter(self._tweaks)
+
+    def __len__(self) -> int:
+        return len(self._tweaks)
+
+    @overload
+    def __getitem__(self, idx: int) -> Tweak: ...
+    @overload
+    def __getitem__(self, idx: range) -> list[Tweak]: ...
+    def __getitem__(self, idx):
+        return self._tweaks[idx]
 
     def __tweak_eaw__(self, configs: ModBuilder):
         for tweak in self._tweaks:
@@ -156,13 +173,13 @@ def tweak(
 type TweakFactory = Callable[..., Tweak]
 
 
-class TweakFunctionFactory(ABC):
+class TweakFunctionFactory[**P](ABC):
     """Utility class which wraps a function that produces a TweakFunction to provide utility
     methods.
     """
 
     @abstractmethod
-    def __call__(self, *args, **kwargs) -> TweakFunction:
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> TweakFunction:
         pass
 
     def filter(
@@ -172,26 +189,26 @@ class TweakFunctionFactory(ABC):
         return _FilteredTweakFunctionFactory(self, FuncArgs(afilters, kwfilters))
 
 
-class tweak_factory(TweakFunctionFactory):
+class tweak_factory[**P](TweakFunctionFactory[P]):
     """Wraps a function that returns a TweakFunction to add support for the filter method at the
     factory level.
     """
 
-    def __init__(self, func: Callable[..., TweakFunction]):
+    def __init__(self, func: Callable[P, TweakFunction]):
         if not isinstance(func, TweakFunctionFactory):
             functools.update_wrapper(self, func)
         self._func = func
 
-    def __call__(self, *args, **kwargs) -> TweakFunction:
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> TweakFunction:
         return self._func(*args, **kwargs)
 
 
-class _FilteredTweakFunctionFactory(TweakFunctionFactory):
-    def __init__(self, inner: TweakFunctionFactory, filters: FuncArgs[FilterFunc | None]):
+class _FilteredTweakFunctionFactory[**P](TweakFunctionFactory[P]):
+    def __init__(self, inner: TweakFunctionFactory[P], filters: FuncArgs[FilterFunc | None]):
         self._inner = inner
         self._filters = filters
 
-    def __call__(self, *args, **kwargs) -> TweakFunction:
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> TweakFunction:
         return self._filters.apply(self._inner(*args, **kwargs).filter)
 
 

@@ -1,7 +1,7 @@
 [project]
 name = "eaw-tweaks"
 version = "0.1.0"
-description = "Add your description here"
+description = "Library for building automatic tweaks for Empire at War"
 readme = "README.md"
 authors = [
     { name = "Zachary Stewart", email = "zachary.c.stewart@gmail.com" }
@@ -11,6 +11,10 @@ dependencies = [
     "lxml>=6.0.2",
     "petro-meg>=1.0.0",
 ]
+license = "MIT"
+
+[project.urls]
+Repository = "https://github.com/zstewar1/eaw-tweaks"
 
 [project.scripts]
 eaw-tweaks = "eaw_tweaks:main"

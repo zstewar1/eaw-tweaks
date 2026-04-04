@@ -1,4 +1,3 @@
-import functools
 import math
 import re
 from typing import Iterable, Literal
@@ -6,7 +5,7 @@ from typing import Iterable, Literal
 from lxml import etree
 
 from .modbuilder import ModBuilder
-from .tweaks import Tweak, TweakFilter, TweakFunctionFactory, tweak, tweak_factory, tweak_filter
+from .tweaks import Tweak, TweakFilter, tweak, tweak_factory, tweak_filter
 from .xmlutil import elem, get_or_insert_child
 
 
@@ -45,116 +44,69 @@ PROJ_LEN = "Projectile_Length"
 PROJ_COLOR = "Projectile_Laser_Color"
 
 
-def name_contains_filter(fragment: str, case_sensitive=True) -> TweakFilter:
-    case_sensitive = bool(case_sensitive)
-    if case_sensitive:
+def name_contains(fragment: str) -> TweakFilter:
 
-        @tweak_filter
-        def name_filter(element: etree.Element) -> bool:
-            return fragment in element.get(NAME, "")
-    else:
-        fragment = fragment.lower()
-
-        @tweak_filter
-        def name_filter(element: etree.Element) -> bool:
-            return fragment in element.get(NAME, "").lower()
+    @tweak_filter
+    def name_filter(element: etree.Element) -> bool:
+        return fragment in element.get(NAME, "")
 
     return name_filter
 
 
-is_laser = name_contains_filter("Laser")
-is_turbolaser = name_contains_filter("Turbolaser")
-is_concussion = name_contains_filter("Concussion")
-is_ion = name_contains_filter("Ion")
-is_energy = is_laser | is_turbolaser | is_ion
-is_proton = name_contains_filter("Proton")
+named_laser = name_contains("Laser")
+named_turbolaser = name_contains("Turbolaser")
+named_ion = name_contains("Ion")
+named_energy = named_laser | named_turbolaser | named_ion
+named_concussion = name_contains("Concussion")
+named_proton = name_contains("Proton")
 
-is_space = name_contains_filter("Ship")
-is_land = name_contains_filter("Ground")
+named_ship = name_contains("Ship")
+named_ground = name_contains("Ground")
 
-is_small = name_contains_filter("Small")
-
-is_space_proton = is_proton & is_space
-
-
-def hardpoint_projectile_name_contains_filter(fragment: str, case_sensitive=True) -> TweakFilter:
-    case_sensitive = bool(case_sensitive)
-    if case_sensitive:
-
-        @tweak_filter
-        def name_filter(hardpoint: etree.Element) -> bool:
-            pt = hardpoint.find(PROJECTILE_TYPE)
-            if pt is None:
-                return False
-            return fragment in pt.text
-    else:
-        fragment = fragment.lower()
-
-        @tweak_filter
-        def name_filter(hardpoint: etree.Element) -> bool:
-            pt = hardpoint.find(PROJECTILE_TYPE)
-            if pt is None:
-                return False
-            return fragment in pt.text.lower()
-
-    return name_filter
+named_small = name_contains("Small")
+named_medium = name_contains("Medium")
+named_large = name_contains("Large")
 
 
-is_laser_hardpoint = hardpoint_projectile_name_contains_filter("Laser")
-is_turbolaser_hardpoint = hardpoint_projectile_name_contains_filter("Turbolaser")
-is_ion_hardpoint = hardpoint_projectile_name_contains_filter("Ion")
+def fire_projectile_name_contains(fragment: str) -> TweakFilter:
 
-is_large_hardpoint = hardpoint_projectile_name_contains_filter("Large")
-is_medium_hardpoint = hardpoint_projectile_name_contains_filter("Medium")
+    @tweak_filter
+    def proj_name_filter(hardpoint: etree.Element) -> bool:
+        pt = hardpoint.find(PROJECTILE_TYPE)
+        if pt is None:
+            return False
+        return fragment in pt.text
 
-
-def support_common_filters(factory: TweakFunctionFactory) -> TweakFunctionFactory:
-    """Adds support for a set of common filters as keyword arguments."""
-
-    @tweak_factory
-    @functools.wraps(factory)
-    def factory_wrapper(
-        *args,
-        name_contains: None | str = None,
-        name_contains_all: None | Iterable[str] = None,
-        name_contains_any: None | Iterable[str] = None,
-        proj_name_contains: None | str = None,
-        proj_name_contains_all: None | Iterable[str] = None,
-        proj_name_contains_any: None | Iterable[str] = None,
-        **kwargs,
-    ):
-        tweak = factory(*args, **kwargs)
-        if name_contains is not None:
-            tweak = tweak.filter(name_contains_filter(name_contains))
-        if name_contains_all is not None:
-            tweak = tweak.filter(
-                TweakFilter.all(*(name_contains_filter(substr) for substr in name_contains_all))
-            )
-        if name_contains_any is not None:
-            tweak = tweak.filter(
-                TweakFilter.any(*(name_contains_filter(substr) for substr in name_contains_any))
-            )
-        if proj_name_contains is not None:
-            tweak = tweak.filter(hardpoint_projectile_name_contains_filter(proj_name_contains))
-        if proj_name_contains_all is not None:
-            filters = (
-                hardpoint_projectile_name_contains_filter(substr)
-                for substr in proj_name_contains_all
-            )
-            tweak = tweak.filter(TweakFilter.all(*filters))
-        if proj_name_contains_any is not None:
-            filters = (
-                hardpoint_projectile_name_contains_filter(substr)
-                for substr in proj_name_contains_any
-            )
-            tweak = tweak.filter(TweakFilter.any(*filters))
-        return tweak
-
-    return factory_wrapper
+    return proj_name_filter
 
 
-@support_common_filters
-@is_energy.apply
+fires_laser = fire_projectile_name_contains("Laser")
+fires_turbolaser = fire_projectile_name_contains("Turbolaser")
+fires_ion = fire_projectile_name_contains("Ion")
+fires_energy = fires_laser | fires_turbolaser | fires_ion
+fires_concussion = fire_projectile_name_contains("Concussion")
+fires_proton = fire_projectile_name_contains("Proton")
+
+fires_ship = fire_projectile_name_contains("Ship")
+fires_ground = fire_projectile_name_contains("Ground")
+
+fires_small = fire_projectile_name_contains("Small")
+fires_medium = fire_projectile_name_contains("Medium")
+fires_large = fire_projectile_name_contains("Large")
+
+def damage_type_contains(fragment: str) -> TweakFilter:
+
+    @tweak_filter
+    def damage_name_filter(hardpoint: etree.Element) -> bool:
+        pt = hardpoint.find(PROJECTILE_TYPE)
+        if pt is None:
+            return False
+        return fragment in pt.text
+
+    return damage_name_filter
+
+
+@named_energy.apply
 @tweak_factory
 def beam_energy_weapons(length_scale=3, width_scale=0.5, fallback_length=12, fallback_width=1.5):
     """Converts all Lasers and Ion cannons to use 'beam' style models."""
@@ -207,7 +159,6 @@ def beam_energy_weapons(length_scale=3, width_scale=0.5, fallback_length=12, fal
     return beam_energy
 
 
-@support_common_filters
 @tweak_factory
 def teardrop_projectiles(length_scale=0.4, width_scale=2):
     """Converts all lasers to use teardrop renderer."""
@@ -243,7 +194,6 @@ def teardrop_projectiles(length_scale=0.4, width_scale=2):
     return teardrop
 
 
-@support_common_filters
 @tweak_factory
 def set_projectile_size(length=1, width=1):
     @tweak("/*/Projectile")
@@ -257,7 +207,6 @@ def set_projectile_size(length=1, width=1):
     return scaler
 
 
-@support_common_filters
 @tweak_factory
 def scale_projectiles(length_scale=1, width_scale=1):
     @tweak("/*/Projectile")
@@ -273,9 +222,8 @@ def scale_projectiles(length_scale=1, width_scale=1):
     return scaler
 
 
-@support_common_filters
 @tweak_factory
-def projectile_aspect_ratio(aspect=50):
+def projectile_aspect_ratio(aspect=50, scale=1.0):
     """Scales projectiles to a target aspect ratio, where length is aspect * width."""
 
     @tweak("/*/Projectile")
@@ -285,8 +233,8 @@ def projectile_aspect_ratio(aspect=50):
             length_elem = projectile.find(PROJ_LEN)
             if width_elem is not None and length_elem is not None:
                 # Re-scale maintaining roughly the same effective visual area
-                width = float(width_elem.text)
-                length = float(length_elem.text)
+                width = float(width_elem.text) * scale
+                length = float(length_elem.text) * scale
                 area = width * length
                 # We want area = length * wwidth and l = width * aspect
                 # So we have area = width * aspect * width
@@ -300,7 +248,6 @@ def projectile_aspect_ratio(aspect=50):
     return scaler
 
 
-@support_common_filters
 @tweak_factory
 def colorize_projectile(color: str):
     @tweak("/*/Projectile")
@@ -319,6 +266,7 @@ PULSE_COUNT = "Fire_Pulse_Count"
 PULSE_DELAY = "Fire_Pulse_Delay_Seconds"
 PROJECTILE_TYPE = "Fire_Projectile_Type"
 INACCURACY = "Fire_Inaccuracy_Distance"
+DAMAGE_TYPE = "Damage_Type"
 
 # Ordered by increasing size!
 SPACE_ACCURACY_CATEGORIES = (
@@ -338,7 +286,6 @@ LAND_ACCURACY_CATEGORIES = (
 )
 
 
-@support_common_filters
 @tweak_factory
 def hardpoint_pulse_balance(
     pulse_delay=None,
@@ -397,11 +344,10 @@ def hardpoint_pulse_balance(
     return reburst
 
 
-@support_common_filters
 @tweak_factory
 def accuracy_on_larger_targets(
     # As long as nothing has both land and space accuracy categories, merging them works.
-    size_order: Iterable[str] = SPACE_ACCURACY_CATEGORIES + LAND_ACCURACY_CATEGORIES,
+    size_order: Iterable[str],
     max_increase=10,
     limit_mode: Literal["min", "previous"] = "previous",
     increase_mode: Literal["add", "mul"] = "add",
